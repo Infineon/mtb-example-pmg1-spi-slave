@@ -7,7 +7,7 @@
 * Related Document: See README.md
 *
 *******************************************************************************
-* Copyright 2021-2022, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2021-2023, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -43,11 +43,11 @@
 /*******************************************************************************
  * Include header files
  ******************************************************************************/
+#include <stdio.h>
+#include <inttypes.h>
 #include "cy_pdl.h"
-#include "cyhal.h"
 #include "cybsp.h"
 #include "SpiSlave.h"
-
 
 /*******************************************************************************
 * Macros
@@ -57,7 +57,13 @@
 #define NUMBER_OF_ELEMENTS   (3UL)
 #define SIZE_OF_ELEMENT      (1UL)
 #define SIZE_OF_PACKET       (NUMBER_OF_ELEMENTS * SIZE_OF_ELEMENT)
+#define CY_ASSERT_FAILED     (0U)
 
+/* Debug print macro to enable UART print */
+/* (For S0 - Debug print will be always zero as SCB UART is not available) */
+#if (!defined(CY_DEVICE_CCG3PA))
+#define DEBUG_PRINT         (0u)
+#endif
 
 /*******************************************************************************
 * Function Prototypes
@@ -65,9 +71,39 @@
 /* Function to turn ON or OFF the LED based on the SPI Master command. */
 static void update_led(uint8_t);
 
-/* Function to handle the error */
-static void handle_error(void);
+#if DEBUG_PRINT
+cy_stc_scb_uart_context_t CYBSP_UART_context; /* Global variable for UART */
+/* Variable used for tracking the print status */
+volatile bool ENTER_LOOP = true;
 
+/*******************************************************************************
+* Function Name: check_status
+********************************************************************************
+* Summary:
+*  Prints the error message.
+*
+* Parameters:
+*  error_msg - message to print if any error encountered.
+*  status - status obtained after evaluation.
+*
+* Return:
+*  void
+*
+*******************************************************************************/
+void check_status(char *message, cy_rslt_t status)
+{
+    char error_msg[50];
+
+    sprintf(error_msg, "Error Code: 0x%08" PRIX32 "\n", status);
+
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n=====================================================\r\n");
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\nFAIL: ");
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, message);
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n");
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, error_msg);
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\r\n=====================================================\r\n");
+}
+#endif
 
 /*******************************************************************************
 * Function Name: main
@@ -100,21 +136,36 @@ int main(void)
     result = cybsp_init() ;
     if (result != CY_RSLT_SUCCESS)
     {
-        CY_ASSERT(0);
+        CY_ASSERT(CY_ASSERT_FAILED);
     }
+
+#if DEBUG_PRINT
+
+    /* Configure and enable the UART peripheral */
+    Cy_SCB_UART_Init(CYBSP_UART_HW, &CYBSP_UART_config, &CYBSP_UART_context);
+    Cy_SCB_UART_Enable(CYBSP_UART_HW);
+
+    /* Sequence to clear screen */
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "\x1b[2J\x1b[;H");
+
+    /* Print "SPI slave" */
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "****************** ");
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "PMG1 MCU: SPI slave");
+    Cy_SCB_UART_PutString(CYBSP_UART_HW, "****************** \r\n\n");
+#endif
 
     /* Initialize the SPI Slave */
     status = init_slave();
-
     if(status == INIT_FAILURE)
     {
-        /* NOTE: This function will block the CPU forever */
-        handle_error();
+#if DEBUG_PRINT
+        check_status("API init_slave failed with error code", status);
+#endif
+        CY_ASSERT(CY_ASSERT_FAILED);
     }
 
     /* Enable global interrupts */
     __enable_irq();
-
 
     for (;;)
     {
@@ -123,25 +174,27 @@ int main(void)
         tx_buffer[PACKET_CMD_POS] = rx_buffer[PACKET_CMD_POS];
         tx_buffer[PACKET_EOP_POS] = PACKET_EOP;
 
-
         /* Get the bytes received by the slave */
         status = read_packet(tx_buffer, rx_buffer, SIZE_OF_PACKET);
 
         /* Check whether the slave succeeded in receiving the required number
          * of bytes and in the right format */
-
         if(status == TRANSFER_COMPLETE)
         {
             /* Communication succeeded. Update the LED. */
             update_led(rx_buffer[PACKET_CMD_POS]);
-
         }
         else
         {
-            /* Communication failed */
-            handle_error();
-
+            CY_ASSERT(CY_ASSERT_FAILED);
         }
+#if DEBUG_PRINT
+        if (ENTER_LOOP)
+        {
+            Cy_SCB_UART_PutString(CYBSP_UART_HW, "Entered for loop\r\n");
+            ENTER_LOOP = false;
+        }
+#endif
     }
 }
 
@@ -175,33 +228,6 @@ static void update_led(uint8_t LED_Cmd)
         /* Turn OFF the LED */
         Cy_GPIO_Set(CYBSP_USER_LED_PORT, CYBSP_USER_LED_NUM);
     }
-}
-
-
-/*******************************************************************************
-* Function Name: handle_error
-********************************************************************************
-*
-* Summary:
-*  This is a blocking function. It disables the interrupt and waits
-*  in an infinite loop. This function is called when an error is
-*  encountered during initialization of the blocks or during
-*  SPI communication.
-*
-* Parameters:
-*  None
-*
-* Return:
-*  None
-*
-*******************************************************************************/
-static void handle_error(void)
-{
-     /* Disable all interrupts. */
-    __disable_irq();
-
-    /* Infinite loop. */
-    while(1u) {}
 }
 
 /* [] END OF FILE */
